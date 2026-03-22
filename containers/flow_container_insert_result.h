@@ -1,0 +1,6 @@
+#ifndef FLOW_CONTAINER_COMMON_H
+#define FLOW_CONTAINER_COMMON_H
+
+enum insert_result { INSERTED, NO_MEMORY, ALREADY_EXISTS };
+
+#endif
