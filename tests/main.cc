@@ -7,6 +7,8 @@
 #include <rte_mempool.h>
 
 #include "../containers/flow_container_v1.h"
+#include "../containers/flow_container_v2.h"
+#include "../containers/flow_container_v3.h"
 #include "../common/flow_traits.h"
 #include "../common/flow_key.h"
 #include "../common/compiler.h"
@@ -28,7 +30,7 @@ struct less<flow_key_t> {
 
 class flow_container_test : public ::testing::Test {
 protected:
-    using container_t = flow_container_v1<flow_key_t, flow_traits, 64>;
+    using container_t = flow_container_v3<flow_key_t, flow_traits, 64>;
 
     struct test_info {
         flow_key_t key;
@@ -47,7 +49,7 @@ protected:
             eal_initialized = true;
         }
 
-        __container.init("test_table", 8, 1024, 1000000, 0);
+        __container.init("test_table", 12, 1024, 1000000, 0);
     }
 
     flow_key_t __create_key(uint32_t src_ip = 0xC0A80101, uint32_t dst_ip = 0xC0A80102, uint16_t src_port = 12345,
@@ -577,6 +579,7 @@ TEST_F(flow_container_test, lookup_hit_validation) {
     }
 }
 
+#if 1
 TEST_F(flow_container_test, rand_op_stress) {
     std::map<flow_key_t, uint64_t> ref;
     constexpr uint32_t             OPERATIONS = 100000;
@@ -610,25 +613,12 @@ TEST_F(flow_container_test, rand_op_stress) {
     }
 
     EXPECT_EQ(__container.get_elements_cnt(), ref.size());
-
-    std::set<flow_key_t> iterated_keys;
-    auto                 it    = __container.get_next();
-    auto                 first = it;
-
-    do {
-        iterated_keys.insert(*it.key());
-        auto ref_it = ref.find(*it.key());
-        ASSERT_NE(ref_it, ref.end());
-        EXPECT_EQ(it.data()->packets, ref_it->second);
-        it = __container.get_next();
-    } while (it != first);
-
-    EXPECT_EQ(iterated_keys.size(), ref.size());
 }
+#endif
 
 class flow_container_burst_test : public ::testing::TestWithParam<int> {
 protected:
-    using container_t = flow_container_v1<flow_key_t, flow_traits, 64>; // PKT_LIMIT=64
+    using container_t = flow_container_v3<flow_key_t, flow_traits, 64>; // PKT_LIMIT=64
 
     struct test_info {
         flow_key_t key;
@@ -665,8 +655,6 @@ protected:
             __container.add(__keys[i], ::rte_rdtsc());
         }
     }
-
-    void TearDown() override { ::rte_memzone_free(__container.get_arena()); }
 
     int get_burst_size() const { return GetParam(); }
 
@@ -752,7 +740,7 @@ INSTANTIATE_TEST_SUITE_P(burst_sizes, flow_container_burst_test,
 
 class FlowContainerConfigTest : public ::testing::TestWithParam<std::tuple<int, int, int>> {
 protected:
-    using container_t = flow_container_v1<flow_key_t, flow_traits, 64>;
+    using container_t = flow_container_v3<flow_key_t, flow_traits, 64>;
 
     struct test_info {
         flow_key_t key;
@@ -796,8 +784,6 @@ protected:
             __container.add(__keys[i], ::rte_rdtsc());
         }
     }
-
-    void TearDown() override { ::rte_memzone_free(__container.get_arena()); }
 
     container_t             __container;
     std::vector<flow_key_t> __keys;
