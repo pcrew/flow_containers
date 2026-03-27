@@ -96,7 +96,7 @@ BENCHMARK_DEFINE_F(ContainerBenchmark, BM_flow_container_v1)(benchmark::State &s
             }
 
             container.lookup(pkts, PKTS_MASK, &hit_mask);
-#if 1
+#if 0
             if (hit_mask != PKTS_MASK) {
                 std::cout << i << std::endl;
                 std::cout << std::bitset<32>(hit_mask) << std::endl;

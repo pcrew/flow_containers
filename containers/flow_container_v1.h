@@ -629,8 +629,9 @@ private:
             rte_prefetch0(bkt);
 
             uint32_t chain_prefetched = 1;
-            for (bkt = __bucket_next(bkt); bkt && chain_prefetched < 4; bkt = __bucket_next(bkt)) {
+            for (bkt = __bucket_next(bkt); bkt && chain_prefetched < 8; bkt = __bucket_next(bkt)) {
                 rte_prefetch0(bkt);
+                rte_prefetch0(&__entries.get_key(bkt->__key_pos[0]));
                 chain_prefetched++;
             }
         }
@@ -646,17 +647,39 @@ private:
 
             for (bucket_t *bkt = &__buckets[bucket_idx]; bkt; bkt = __bucket_next(bkt)) {
                 rte_prefetch0(bkt);
-                for (uint32_t i = 0; i < ENTRIES_PER_BUCKET; i++) {
-                    if (bkt->__sig[i] == sig) {
-                        uint32_t     key_idx = bkt->__key_pos[i];
-                        const key_t &bkt_key = __entries.get_key(key_idx);
+                if (likely(bkt->__sig[0] == sig)) {
+                    uint32_t key_idx = bkt->__key_pos[0];
+                    if (likely(*key == __entries.get_key(key_idx))) {
+                        hits |= (1ULL << idx);
+                        info[idx].set_entry(__entries.get_data(key_idx));
+                        goto __next__;
+                    }
+                }
 
-                        if (*key == bkt_key) {
-                            hits |= (1ULL << idx);
-                            data_ptr_t data = __entries.get_data(key_idx);
-                            info[idx].set_entry(data);
-                            goto __next__;
-                        }
+                if (likely(bkt->__sig[1] == sig)) {
+                    uint32_t key_idx = bkt->__key_pos[1];
+                    if (likely(*key == __entries.get_key(key_idx))) {
+                        hits |= (1ULL << idx);
+                        info[idx].set_entry(__entries.get_data(key_idx));
+                        goto __next__;
+                    }
+                }
+
+                if ((bkt->__sig[2] == sig)) {
+                    uint32_t key_idx = bkt->__key_pos[2];
+                    if ((*key == __entries.get_key(key_idx))) {
+                        hits |= (1ULL << idx);
+                        info[idx].set_entry(__entries.get_data(key_idx));
+                        goto __next__;
+                    }
+                }
+
+                if (bkt->__sig[3] == sig) {
+                    uint32_t key_idx = bkt->__key_pos[3];
+                    if (likely(*key == __entries.get_key(key_idx))) {
+                        hits |= (1ULL << idx);
+                        info[idx].set_entry(__entries.get_data(key_idx));
+                        goto __next__;
                     }
                 }
             }
