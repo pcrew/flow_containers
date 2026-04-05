@@ -27,7 +27,7 @@ struct entries_separate : public T_traits {
 
     template <typename... Args>
     entries_separate(Args &&...args)
-        : T_traits(std::forward(args)...)
+        : T_traits(std::forward<Args>(args)...)
         , keys(nullptr)
         , data(nullptr) {}
 
@@ -261,9 +261,9 @@ public:
                 if (sig == bkt_sig && key == __entries.get_key(bkt_key_idx)) {
                     auto data = __entries.get_data(bkt_key_idx);
                     if (likely(data)) {
-                        return std::make_pair(iterator(bucket, 0, data, &key), insert_result::ALREADY_EXISTS);
+                        return std::make_pair(iterator(bucket, i, data, &key), insert_result::ALREADY_EXISTS);
                     } else {
-                        return std::make_pair(iterator(bucket, 0, data, &key), insert_result::INSERTED);
+                        return std::make_pair(iterator(bucket, i, data, &key), insert_result::INSERTED);
                     }
                 }
             }
@@ -311,7 +311,7 @@ public:
                     __inserted++;
 
                     auto data = __entries.set(key, bkt_key_idx);
-                    return std::make_pair(iterator(bucket, 0, data, &key), insert_result::INSERTED);
+                    return std::make_pair(iterator(bucket, i, data, &key), insert_result::INSERTED);
                 }
             }
         }
@@ -647,6 +647,8 @@ private:
 
             for (bucket_t *bkt = &__buckets[bucket_idx]; bkt; bkt = __bucket_next(bkt)) {
                 rte_prefetch0(bkt);
+                if (__bucket_next(bkt)) rte_prefetch0(__bucket_next(bkt));
+
                 if (likely(bkt->__sig[0] == sig)) {
                     uint32_t key_idx = bkt->__key_pos[0];
                     if (likely(*key == __entries.get_key(key_idx))) {
