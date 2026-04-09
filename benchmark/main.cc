@@ -19,6 +19,7 @@
 
 #include "../containers/flow_container_v1.h"
 #include "../containers/flow_container_v2.h"
+#include "../containers/flow_container_v3.h"
 #include "../common/flow_traits.h"
 #include "../common/flow_key.h"
 
@@ -152,7 +153,7 @@ BENCHMARK_DEFINE_F(ContainerBenchmark, BM_flow_container_v2)(benchmark::State &s
 }
 
 BENCHMARK_DEFINE_F(ContainerBenchmark, BM_flow_container_v3)(benchmark::State &state) {
-    flow_container_v2<flow_key_t, flow_traits, 64> container;
+    flow_container_v3<flow_key_t, flow_traits, 64> container;
     container.init("bench", 19, 65536 * 8, 10500000, 0);
 
     for (uint32_t i = 0; i < __keys.size(); i++) {
@@ -211,10 +212,9 @@ BENCHMARK_DEFINE_F(ContainerBenchmark, BM_rte_hash)(benchmark::State &state) {
         }
     }
 
-    const void        *keys_batch[BATCH_SIZE];
-    void              *data_batch[BATCH_SIZE];
-    uint64_t           hit_mask;
-    constexpr uint64_t PKTS_MASK = BATCH_SIZE == 64 ? ~0LLU : (1LLU << BATCH_SIZE) - 1;
+    const void *keys_batch[BATCH_SIZE];
+    void       *data_batch[BATCH_SIZE];
+    uint64_t    hit_mask;
 
     for (auto _ : state) {
         for (uint32_t i = 0; i < __keys.size(); i += BATCH_SIZE) {
