@@ -13,6 +13,10 @@
 #include "../common/flow_key.h"
 #include "../common/compiler.h"
 
+#ifndef FLOW_CONTAINER
+#error "FLOW_CONTAINER must be defined by the build (see tests/Makefile: -DFLOW_CONTAINER=flow_container_v1)."
+#endif
+
 static std::atomic<bool> eal_initialized{false};
 
 namespace std {
@@ -30,7 +34,7 @@ struct less<flow_key_t> {
 
 class flow_container_test : public ::testing::Test {
 protected:
-    using container_t = flow_container_v3<flow_key_t, flow_traits, 64>;
+    using container_t = FLOW_CONTAINER<flow_key_t, flow_traits, 64>;
 
     struct test_info {
         flow_key_t key;
@@ -618,7 +622,7 @@ TEST_F(flow_container_test, rand_op_stress) {
 
 class flow_container_burst_test : public ::testing::TestWithParam<int> {
 protected:
-    using container_t = flow_container_v3<flow_key_t, flow_traits, 64>; // PKT_LIMIT=64
+    using container_t = FLOW_CONTAINER<flow_key_t, flow_traits, 64>; // PKT_LIMIT=64
 
     struct test_info {
         flow_key_t key;
@@ -740,7 +744,7 @@ INSTANTIATE_TEST_SUITE_P(burst_sizes, flow_container_burst_test,
 
 class FlowContainerConfigTest : public ::testing::TestWithParam<std::tuple<int, int, int>> {
 protected:
-    using container_t = flow_container_v3<flow_key_t, flow_traits, 64>;
+    using container_t = FLOW_CONTAINER<flow_key_t, flow_traits, 64>;
 
     struct test_info {
         flow_key_t key;
