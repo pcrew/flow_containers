@@ -135,6 +135,7 @@ private:
 
     // statistics
     uint32_t __used[ENTRIES_PER_BUCKET + 1];
+    uint32_t __elem_cnt;
     uint64_t __inserted;
     uint64_t __erased;
     uint64_t __no_space;
@@ -156,6 +157,7 @@ public:
         , __current_iterator_pos(0)
         , __n_buckets_ext(0)
         , __n_keys(0)
+        , __elem_cnt(0)
         , __inserted(0)
         , __erased(0)
         , __no_space(0)
@@ -237,21 +239,25 @@ public:
             __key_stack[i] = i;
         }
         __key_stack_pos = n_key;
+
+        __elem_cnt = 0;
     }
 
     uint32_t get_key_idx(bucket_t *bkt, uint32_t i) { return bkt->__key_pos[i]; }
 
     std::pair<iterator, insert_result> add(const key_t &key, timestamp_t current_time) {
-        uint32_t  sig{key.__hash};
-        uint32_t  bucket_index = sig & (__n_buckets - 1);
+        return add(key, current_time, key.get_flow_hash());
+    }
+
+    std::pair<iterator, insert_result> add(const key_t &key, timestamp_t current_time, uint32_t flow_hash) {
+        uint32_t  bucket_index = flow_hash & (__n_buckets - 1);
+        uint32_t  sig          = (flow_hash >> 16) | 1;
         bucket_t *bucket0      = &__buckets[bucket_index];
 
         if (unlikely(__entries.is_no_memory())) {
             __no_space++;
             return std::make_pair(iterator(), insert_result::NO_MEMORY);
         }
-
-        sig = (sig >> 16) | 1;
 
         for (auto bucket = bucket0; bucket != nullptr; bucket = __bucket_next(bucket)) {
             for (uint32_t i = 0; i < ENTRIES_PER_BUCKET; i++) {
@@ -309,6 +315,7 @@ public:
 
                     __used[bucket->__count]++;
                     __inserted++;
+                    __elem_cnt++;
 
                     auto data = __entries.set(key, bkt_key_idx);
                     return std::make_pair(iterator(bucket, i, data, &key), insert_result::INSERTED);
@@ -351,6 +358,7 @@ public:
             __used[0]--;
             __used[1]++;
             __inserted++;
+            __elem_cnt++;
 
             auto data = __entries.set(key, bkt_key_idx);
             return std::make_pair(iterator(bucket, 0, data, &key), insert_result::INSERTED);
@@ -361,10 +369,11 @@ public:
     }
 
     bool erase(const key_t &key) {
-        uint32_t  bucket_index = key.__hash & (__n_buckets - 1);
-        bucket_t *bucket0      = &__buckets[bucket_index];
+        const uint32_t flow_hash = key.get_flow_hash();
+        uint32_t       bucket_index = flow_hash & (__n_buckets - 1);
+        bucket_t      *bucket0      = &__buckets[bucket_index];
 
-        uint32_t sig = (key.__hash >> 16) | 1;
+        uint32_t sig = (flow_hash >> 16) | 1;
 
         for (auto bucket = bucket0; bucket != nullptr; bucket = __bucket_next(bucket)) {
             for (uint32_t i = 0; i < ENTRIES_PER_BUCKET; i++) {
@@ -457,18 +466,30 @@ public:
 
     template <typename T_info>
     void lookup(T_info *info, uint64_t pkts_mask, uint64_t *lookup_hit_mask) {
-        // TODO: politics
-        uint32_t table_size = get_elements_cnt();
-
-        if (__used[2] == 0 && __used[3] == 0 && __used[4] == 0)
+        if (__used[2] == 0 && __used[3] == 0 && __used[4] == 0) {
             __lookup_direct_small(info, pkts_mask, lookup_hit_mask);
-        else if (table_size < 100000)
-            __lookup_direct(info, pkts_mask, lookup_hit_mask);
-        else
+            return;
+        }
+        /* __lookup: two-phase prefetch hides DRAM/L3 latency on large working sets (see benchmark).
+         * __lookup_direct: cheaper when the table is small and chains are short. Overflow pressure
+         * alone is not enough to choose — at ~1M elems __lookup_direct regressed vs pipelined path. */
+        if (__elem_cnt >= 100000u || __lookup_prefetch_chains_beneficial())
             __lookup(info, pkts_mask, lookup_hit_mask);
+        else
+            __lookup_direct(info, pkts_mask, lookup_hit_mask);
     }
 
 private:
+    /** Extra pipelined prefetch when many overflow buckets sit in hash chains. */
+    bool __lookup_prefetch_chains_beneficial() const {
+        if (__n_buckets_ext == 0)
+            return false;
+        const uint32_t overflow_in_use = __n_buckets_ext - __bkt_stack_pos;
+        const uint32_t shifted         = __n_buckets_ext >> 6;
+        const uint32_t thresh          = (256u > shifted) ? 256u : shifted;
+        return overflow_in_use > thresh;
+    }
+
     void __lookup_direct_small(auto *info, uint64_t pkts_mask, uint64_t *lookup_hit_mask) {
         uint64_t hits = 0;
 
@@ -476,10 +497,10 @@ private:
             uint32_t idx = __builtin_ctzll(pkts_mask);
             pkts_mask &= ~(1ULL << idx);
 
+            uint32_t     hash       = info[idx].lookup_hash();
             const key_t *key;
             info[idx].get_key(key);
 
-            uint32_t hash       = key->__hash;
             uint32_t bucket_idx = hash & (__n_buckets - 1);
             uint32_t sig        = (hash >> 16) | 1;
 
@@ -501,10 +522,10 @@ private:
             uint32_t idx = __builtin_ctzll(pkts_mask);
             pkts_mask &= ~(1ULL << idx);
 
+            uint32_t     hash       = info[idx].lookup_hash();
             const key_t *key;
             info[idx].get_key(key);
 
-            uint32_t hash       = key->__hash;
             uint32_t bucket_idx = hash & (__n_buckets - 1);
             uint32_t sig        = (hash >> 16) | 1;
 
@@ -585,11 +606,12 @@ private:
         for (uint32_t j = 0; j < count; j++) {
             uint32_t idx = indices[j];
 
+            uint32_t     hash       = info[idx].lookup_hash();
             const key_t *key;
             info[idx].get_key(key);
 
-            uint32_t sig        = (key->__hash >> 16) | 1;
-            uint32_t bucket_idx = key->__hash & (__n_buckets - 1);
+            uint32_t sig        = (hash >> 16) | 1;
+            uint32_t bucket_idx = hash & (__n_buckets - 1);
 
             for (bucket_t *bkt = &__buckets[bucket_idx]; bkt; bkt = __bucket_next(bkt)) {
                 for (uint32_t i = 0; i < ENTRIES_PER_BUCKET; i++) {
@@ -611,20 +633,27 @@ private:
     void __lookup(auto *info, uint64_t pkts_mask, uint64_t *lookup_hit_mask) {
         uint64_t hits = 0;
         uint32_t pkt_indices[PKT_LIMIT];
+        uint32_t pkt_hashes[PKT_LIMIT];
+        const key_t *pkt_keys[PKT_LIMIT];
         uint32_t pkt_count = 0;
 
         uint64_t mask = pkts_mask;
         while (mask) {
             uint32_t idx = __builtin_ctzll(mask);
             mask &= ~(1ULL << idx);
-            pkt_indices[pkt_count++] = idx;
+            pkt_indices[pkt_count] = idx;
 
+            uint32_t     hash       = info[idx].lookup_hash();
             const key_t *key;
             info[idx].get_key(key);
 
+            pkt_hashes[pkt_count] = hash;
+            pkt_keys[pkt_count]   = key;
+            pkt_count++;
+
             rte_prefetch0(key);
 
-            uint32_t  bucket_idx = key->__hash & (__n_buckets - 1);
+            uint32_t  bucket_idx = hash & (__n_buckets - 1);
             bucket_t *bkt        = &__buckets[bucket_idx];
             rte_prefetch0(bkt);
 
@@ -637,13 +666,12 @@ private:
         }
 
         for (uint32_t j = 0; j < pkt_count; j++) {
-            uint32_t idx = pkt_indices[j];
+            uint32_t       idx  = pkt_indices[j];
+            const uint32_t hash = pkt_hashes[j];
+            const key_t   *key  = pkt_keys[j];
 
-            const key_t *key;
-            info[idx].get_key(key);
-
-            uint32_t sig        = (key->__hash >> 16) | 1;
-            uint32_t bucket_idx = key->__hash & (__n_buckets - 1);
+            uint32_t sig        = (hash >> 16) | 1;
+            uint32_t bucket_idx = hash & (__n_buckets - 1);
 
             for (bucket_t *bkt = &__buckets[bucket_idx]; bkt; bkt = __bucket_next(bkt)) {
                 rte_prefetch0(bkt);
@@ -747,6 +775,7 @@ private:
         __used[bucket->__count]++;
 
         __erased++;
+        __elem_cnt--;
 
         if (bucket->__count == 0) {
             bucket_t *iter_bucket = &__buckets[__current_iterator_bkt];
@@ -781,13 +810,7 @@ private:
     }
 
 public:
-    uint32_t get_elements_cnt() const {
-        uint32_t res{0};
-        for (uint32_t i = 0; i <= ENTRIES_PER_BUCKET; i++) {
-            res += __used[i] * i;
-        }
-        return res;
-    }
+    uint32_t get_elements_cnt() const { return __elem_cnt; }
 
     uint32_t get_total_buckets_cnt() const { return __n_buckets + __n_buckets_ext; }
     uint32_t get_free_buckers_cnt() const { return __used[0]; }

@@ -15,7 +15,8 @@ struct flow_key_t {
         , __dst_ip(0)
         , __src_port(0)
         , __dst_port(0)
-        , __proto(0) {}
+        , __proto(0)
+        , __pad{0, 0, 0} {}
 
     flow_key_t(const rte_mbuf *mbuf) {
         auto eth = rte_pktmbuf_mtod(mbuf, struct rte_ether_hdr *);
@@ -43,14 +44,15 @@ struct flow_key_t {
             __dst_port = 0xFFFF;
             break;
         }
+        __pad[0] = __pad[1] = __pad[2] = 0;
     }
 
     bool operator==(const flow_key_t &other) const {
-        return __src_ip == other.__src_ip && __dst_ip == other.__dst_ip && __src_port == other.__src_port &&
-               __dst_port == other.__dst_port && __proto == other.__proto;
+        /* Logical fields occupy 13 bytes; padding (last 3) ignored — same as field-wise == */
+        return __builtin_memcmp(static_cast<const void *>(this), static_cast<const void *>(&other), 13) == 0;
     }
 
-    uint32_t get_flow_hash() {
+    uint32_t get_flow_hash() const {
         return ::rte_jhash_3words(__src_ip ^ (__src_port << 16), __dst_ip ^ (__dst_port << 16), __proto, 0);
     }
 
@@ -59,14 +61,9 @@ struct flow_key_t {
     uint16_t __src_port;
     uint16_t __dst_port;
     uint8_t  __proto;
-
-    union {
-        uint32_t __hash;
-        struct {
-            uint16_t __hash_lo;
-            uint16_t __hash_hi;
-        };
-    };
+    uint8_t  __pad[3];
 };
-#endif
 
+static_assert(sizeof(flow_key_t) == 16, "flow_key_t must be 16 bytes (5-tuple + padding)");
+
+#endif

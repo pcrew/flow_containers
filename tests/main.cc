@@ -38,8 +38,10 @@ protected:
 
     struct test_info {
         flow_key_t key;
+        uint32_t   hash;
         flow_data *data;
         void       get_key(const flow_key_t *&k) const { k = &key; }
+        uint32_t   lookup_hash() const { return hash; }
         void       set_entry(flow_data *d) { data = d; }
     };
 
@@ -57,7 +59,7 @@ protected:
     }
 
     flow_key_t __create_key(uint32_t src_ip = 0xC0A80101, uint32_t dst_ip = 0xC0A80102, uint16_t src_port = 12345,
-                            uint16_t dst_port = 54321, uint8_t proto = IPPROTO_TCP, uint32_t hash = 0) {
+                            uint16_t dst_port = 54321, uint8_t proto = IPPROTO_TCP) {
         flow_key_t key;
 
         key.__src_ip   = src_ip;
@@ -65,12 +67,11 @@ protected:
         key.__src_port = src_port;
         key.__dst_port = dst_port;
         key.__proto    = proto;
-        key.__hash     = hash ? hash : key.get_flow_hash();
 
         return key;
     }
 
-    flow_key_t __create_key_predict(uint32_t id, uint32_t hash_mod = 0) {
+    flow_key_t __create_key_predict(uint32_t id) {
         flow_key_t key;
 
         key.__src_ip   = 0xC0A80000 + (id & 0xFF);
@@ -78,7 +79,6 @@ protected:
         key.__src_port = 1024 + (id % 0xFFFF);
         key.__dst_port = 2048 + ((id >> 16) & 0xFFFF);
         key.__proto    = (id % 2) ? IPPROTO_TCP : IPPROTO_UDP;
-        key.__hash     = hash_mod ? (key.get_flow_hash() & ~0xFF) | (id % hash_mod) : key.get_flow_hash();
 
         return key;
     }
@@ -190,8 +190,8 @@ TEST_F(flow_container_test, collisions) {
     uint32_t                inserted = 0;
 
     for (uint32_t i = 0; i < 2000; i++) {
-        auto key       = __create_key(0xC0A80000 + i, 0xC0A90000, 8080 + i, 80, IPPROTO_TCP, collision_hash);
-        auto [it, res] = __container.add(key, ::rte_rdtsc());
+        auto key       = __create_key(0xC0A80000 + i, 0xC0A90000, 8080 + i, 80, IPPROTO_TCP);
+        auto [it, res] = __container.add(key, ::rte_rdtsc(), collision_hash);
         if (res == insert_result::INSERTED) {
             inserted++;
             keys.push_back(key);
@@ -218,14 +218,14 @@ TEST_F(flow_container_test, collisions) {
 TEST_F(flow_container_test, bucket_overflow) {
     auto first_key = __create_key();
 
-    uint32_t bkt_idx = first_key.__hash & ((1 << 8) - 1);
+    uint32_t bkt_idx = first_key.get_flow_hash() & ((1 << 8) - 1);
 
     std::vector<flow_key_t> keys;
     for (uint32_t i = 0; i < 500; i++) {
-        flow_key_t key = __create_key(0xC0A80000 + i, 0xC0A90000 + i, 80 + i, 80 + i, IPPROTO_TCP);
-        key.__hash     = (key.__hash & ~((1 << 8) - 1)) | bkt_idx;
+        flow_key_t key    = __create_key(0xC0A80000 + i, 0xC0A90000 + i, 80 + i, 80 + i, IPPROTO_TCP);
+        uint32_t   forced = (key.get_flow_hash() & ~((1 << 8) - 1)) | bkt_idx;
 
-        auto [it, res] = __container.add(key, ::rte_rdtsc());
+        auto [it, res] = __container.add(key, ::rte_rdtsc(), forced);
         if (res == insert_result::INSERTED) {
             keys.push_back(key);
         }
@@ -279,6 +279,7 @@ TEST_F(flow_container_test, basic_lookup) {
 
     for (uint32_t i = 0; i < BURST_SIZE; i++) {
         infos[i].key  = keys[i];
+        infos[i].hash = keys[i].get_flow_hash();
         infos[i].data = nullptr;
     }
 
@@ -305,12 +306,15 @@ TEST_F(flow_container_test, lookup_miss) {
 
     for (uint32_t i = 0; i < BURST_SIZE / 2; i++) {
         infos[i].key  = existing_keys[i];
+        infos[i].hash = existing_keys[i].get_flow_hash();
         infos[i].data = nullptr;
     }
 
     for (uint32_t i = BURST_SIZE / 2; i < BURST_SIZE; i++) {
-        infos[i].key  = __create_key(0xDEADDEAD + i, 0xDEADDEAD, i, 80, IPPROTO_TCP);
-        infos[i].data = nullptr;
+        flow_key_t miss_key = __create_key(0xDEADDEAD + i, 0xDEADDEAD, i, 80, IPPROTO_TCP);
+        infos[i].key        = miss_key;
+        infos[i].hash       = miss_key.get_flow_hash();
+        infos[i].data       = nullptr;
     }
 
     uint64_t hit_mask = 0;
@@ -473,10 +477,9 @@ TEST_F(flow_container_test, collision_with_validation) {
     std::map<flow_key_t, uint64_t> packets_count;
 
     for (uint32_t i = 0; i < 500; i++) {
-        auto key   = __create_key_predict(i, ::rte_rdtsc());
-        key.__hash = collision_hash;
+        auto key = __create_key_predict(i);
 
-        auto [it, res] = __container.add(key, ::rte_rdtsc());
+        auto [it, res] = __container.add(key, ::rte_rdtsc(), collision_hash);
         if (res == insert_result::INSERTED) {
             packets_count[key] = i * 5;
             it.data()->packets = i * 5;
@@ -550,6 +553,7 @@ TEST_F(flow_container_test, lookup_hit_validation) {
     test_info pkts[16];
     for (uint32_t i = 0; i < 8; i++) {
         pkts[i].key  = keys[i * 2];
+        pkts[i].hash = keys[i * 2].get_flow_hash();
         pkts[i].data = nullptr;
     }
 
@@ -565,9 +569,12 @@ TEST_F(flow_container_test, lookup_hit_validation) {
 
     for (uint32_t i = 0; i < 8; i++) {
         if (i % 2 == 0) {
-            pkts[i].key = keys[i];
+            pkts[i].key  = keys[i];
+            pkts[i].hash = keys[i].get_flow_hash();
         } else {
-            pkts[i].key = __create_key_predict(10000 + i);
+            flow_key_t k = __create_key_predict(10000 + i);
+            pkts[i].key  = k;
+            pkts[i].hash = k.get_flow_hash();
         }
         pkts[i].data = nullptr;
     }
@@ -626,8 +633,10 @@ protected:
 
     struct test_info {
         flow_key_t key;
+        uint32_t   hash;
         flow_data *data;
         void       get_key(const flow_key_t *&k) const { k = &key; }
+        uint32_t   lookup_hash() const { return hash; }
         void       set_entry(flow_data *d) { data = d; }
     };
 
@@ -650,7 +659,6 @@ protected:
             key.__src_port = 1024 + i;
             key.__dst_port = 2048 + i;
             key.__proto    = i % 2 ? IPPROTO_TCP : IPPROTO_UDP;
-            key.__hash     = key.get_flow_hash();
             __keys.push_back(key);
         }
 
@@ -673,6 +681,7 @@ TEST_P(flow_container_burst_test, all_hits) {
     uint64_t expected_hits = 0;
     for (int i = 0; i < BURST_SIZE; i++) {
         pkts[i].key  = __keys[i % 500];
+        pkts[i].hash = __keys[i % 500].get_flow_hash();
         pkts[i].data = nullptr;
         expected_hits |= (1ULL << i);
     }
@@ -695,10 +704,12 @@ TEST_P(flow_container_burst_test, mixed_hits) {
     uint64_t expected_hits = 0;
     for (int i = 0; i < BURST_SIZE; i++) {
         if (i % 2 == 0) {
-            pkts[i].key = __keys[i % 500];
+            pkts[i].key  = __keys[i % 500];
+            pkts[i].hash = __keys[i % 500].get_flow_hash();
             expected_hits |= (1ULL << i);
         } else {
-            pkts[i].key = __keys[500 + (i % 500)];
+            pkts[i].key  = __keys[500 + (i % 500)];
+            pkts[i].hash = __keys[500 + (i % 500)].get_flow_hash();
         }
         pkts[i].data = nullptr;
     }
@@ -725,6 +736,7 @@ TEST_P(flow_container_burst_test, partial_burst) {
 
     for (int i = 0; i < ACTUAL_SIZE; i++) {
         pkts[i].key  = __keys[i % 500];
+        pkts[i].hash = __keys[i % 500].get_flow_hash();
         pkts[i].data = nullptr;
     }
 
@@ -748,8 +760,10 @@ protected:
 
     struct test_info {
         flow_key_t key;
+        uint32_t   hash;
         flow_data *data;
         void       get_key(const flow_key_t *&k) const { k = &key; }
+        uint32_t   lookup_hash() const { return hash; }
         void       set_entry(flow_data *d) { data = d; }
     };
 
@@ -779,7 +793,6 @@ protected:
             key.__src_port = rand() & 0xFFFF;
             key.__dst_port = rand() & 0xFFFF;
             key.__proto    = rand() % 2 ? IPPROTO_TCP : IPPROTO_UDP;
-            key.__hash     = key.get_flow_hash();
             __keys.push_back(key);
         }
 
@@ -807,6 +820,7 @@ TEST_P(FlowContainerConfigTest, LookupPerformance) {
         for (int i = 0; i < BURST_SIZE; i++) {
             int key_idx  = rand() % __keys.size();
             pkts[i].key  = __keys[key_idx];
+            pkts[i].hash = __keys[key_idx].get_flow_hash();
             pkts[i].data = nullptr;
         }
 

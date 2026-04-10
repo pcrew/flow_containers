@@ -24,7 +24,6 @@ public:
             key.__src_port = rte_rand() & 0xFFFF;
             key.__dst_port = rte_rand() & 0xFFFF;
             key.__proto    = (rte_rand() & 1) ? IPPROTO_TCP : IPPROTO_UDP;
-            key.__hash     = key.get_flow_hash();
 
             __known_flows.push_back(key);
         }
@@ -47,8 +46,8 @@ public:
                 pkt.__key  = __known_flows[idx];
             }
 
-            pkt.__key.__hash = pkt.__key.get_flow_hash();
-            pkt.__data       = nullptr;
+            pkt.__flow_hash = pkt.__key.get_flow_hash();
+            pkt.__data      = nullptr;
             pkt.__port_id    = 0;
             pkt.__timestamp  = rte_rdtsc();
 

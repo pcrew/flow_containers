@@ -28,16 +28,18 @@
 constexpr uint32_t BATCH_SIZE{32};
 
 struct flow_key_hash {
-    std::size_t operator()(const flow_key_t &k) const { return k.__hash; }
+    std::size_t operator()(const flow_key_t &k) const { return k.get_flow_hash(); }
 };
 
 struct pkt_info {
     flow_key_t key;
+    uint32_t   hash;
     flow_data *data;
 
-    void get_key(const flow_key_t *&k) const { k = &key; }
-    void set_entry(flow_data *d) { data = d; }
-    void prefetch() const {
+    void     get_key(const flow_key_t *&k) const { k = &key; }
+    uint32_t lookup_hash() const { return hash; }
+    void     set_entry(flow_data *d) { data = d; }
+    void     prefetch() const {
         if (data) rte_prefetch0(data);
     }
 };
@@ -68,7 +70,6 @@ protected:
             key.__src_port = port_dist(rng);
             key.__dst_port = port_dist(rng);
             key.__proto    = proto_dist(rng) ? IPPROTO_TCP : IPPROTO_UDP;
-            key.__hash     = key.get_flow_hash();
             __keys.push_back(key);
         }
     }
@@ -80,7 +81,7 @@ protected:
 
 BENCHMARK_DEFINE_F(ContainerBenchmark, BM_flow_container_v1)(benchmark::State &state) {
     flow_container_v1<flow_key_t, flow_traits, 64> container;
-    container.init("bench", 22, 65536 * 8, 10500000, 0);
+    container.init("bench", 23, 65536 * 8, 10500000, 0);
 
     for (uint32_t i = 0; i < __keys.size(); i++) {
         container.add(__keys[i], i);
@@ -96,6 +97,7 @@ BENCHMARK_DEFINE_F(ContainerBenchmark, BM_flow_container_v1)(benchmark::State &s
         for (uint64_t i = 0; i < __keys.size(); i += BATCH_SIZE) {
             for (uint64_t j = 0; j < BATCH_SIZE && i + j < __keys.size(); j++) {
                 pkts[j].key  = __keys[i + j];
+                pkts[j].hash = __keys[i + j].get_flow_hash();
                 pkts[j].data = nullptr;
             }
 
@@ -133,6 +135,7 @@ BENCHMARK_DEFINE_F(ContainerBenchmark, BM_flow_container_v2)(benchmark::State &s
         for (uint64_t i = 0; i < __keys.size(); i += BATCH_SIZE) {
             for (uint64_t j = 0; j < BATCH_SIZE && i + j < __keys.size(); j++) {
                 pkts[j].key  = __keys[i + j];
+                pkts[j].hash = __keys[i + j].get_flow_hash();
                 pkts[j].data = nullptr;
             }
 
@@ -170,6 +173,7 @@ BENCHMARK_DEFINE_F(ContainerBenchmark, BM_flow_container_v3)(benchmark::State &s
         for (uint64_t i = 0; i < __keys.size(); i += BATCH_SIZE) {
             for (uint64_t j = 0; j < BATCH_SIZE && i + j < __keys.size(); j++) {
                 pkts[j].key  = __keys[i + j];
+                pkts[j].hash = __keys[i + j].get_flow_hash();
                 pkts[j].data = nullptr;
             }
 
@@ -277,7 +281,7 @@ BENCHMARK_DEFINE_F(ContainerBenchmark, BM_boost_unordered_map)(benchmark::State 
 }
 
 struct flow_key_compare {
-    std::size_t hash(const flow_key_t &k) const { return k.__hash; }
+    std::size_t hash(const flow_key_t &k) const { return k.get_flow_hash(); }
     bool        equal(const flow_key_t &a, const flow_key_t &b) const { return a == b; }
 };
 

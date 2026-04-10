@@ -19,7 +19,7 @@ struct flow_container_v2_impl {
     using data_t      = typename T_traits::value_type;
     using timestamp_t = typename T_traits::timestamp_type;
 
-    static_assert(sizeof(key_t) == 20, "Hash tree key should be 20 bytes.");
+    static_assert(sizeof(key_t) == 16, "flow key should be 16 bytes (5-tuple + padding).");
 
 private:
     static constexpr uint32_t ENTRIES_PER_BUCKET   = 4;
@@ -179,9 +179,12 @@ public:
     }
 
     std::pair<iterator, insert_result> add(const key_t &key, timestamp_t current_time) {
-        uint32_t  hash       = key.__hash;
-        uint32_t  sig        = (hash >> 16) | 1;
-        uint32_t  bucket_idx = hash & (__n_buckets - 1);
+        return add(key, current_time, key.get_flow_hash());
+    }
+
+    std::pair<iterator, insert_result> add(const key_t &key, timestamp_t current_time, uint32_t flow_hash) {
+        uint32_t  sig        = (flow_hash >> 16) | 1;
+        uint32_t  bucket_idx = flow_hash & (__n_buckets - 1);
         bucket_t *bucket     = &__buckets[bucket_idx];
 
         for (bucket_t *b = bucket; b; b = __bucket_next(b)) {
@@ -258,9 +261,9 @@ public:
     }
 
     bool erase(const key_t &key) {
-        uint32_t hash       = key.__hash;
-        uint32_t sig        = (hash >> 16) | 1;
-        uint32_t bucket_idx = hash & (__n_buckets - 1);
+        uint32_t flow_hash  = key.get_flow_hash();
+        uint32_t sig        = (flow_hash >> 16) | 1;
+        uint32_t bucket_idx = flow_hash & (__n_buckets - 1);
 
         for (bucket_t *b = &__buckets[bucket_idx]; b; b = __bucket_next(b)) {
             for (uint32_t i = 0; i < ENTRIES_PER_BUCKET; i++) {
@@ -323,10 +326,10 @@ public:
             uint32_t idx = __builtin_ctzll(pkts_mask);
             pkts_mask &= ~(1ULL << idx);
 
+            uint32_t     hash       = info[idx].lookup_hash();
             const key_t *key;
             info[idx].get_key(key);
 
-            uint32_t hash       = key->__hash;
             uint32_t sig        = (hash >> 16) | 1;
             uint32_t bucket_idx = hash & (__n_buckets - 1);
 
