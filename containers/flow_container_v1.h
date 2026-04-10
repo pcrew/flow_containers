@@ -369,7 +369,7 @@ public:
     }
 
     bool erase(const key_t &key) {
-        const uint32_t flow_hash = key.get_flow_hash();
+        const uint32_t flow_hash    = key.get_flow_hash();
         uint32_t       bucket_index = flow_hash & (__n_buckets - 1);
         bucket_t      *bucket0      = &__buckets[bucket_index];
 
@@ -470,9 +470,6 @@ public:
             __lookup_direct_small(info, pkts_mask, lookup_hit_mask);
             return;
         }
-        /* __lookup: two-phase prefetch hides DRAM/L3 latency on large working sets (see benchmark).
-         * __lookup_direct: cheaper when the table is small and chains are short. Overflow pressure
-         * alone is not enough to choose — at ~1M elems __lookup_direct regressed vs pipelined path. */
         if (__elem_cnt >= 100000u || __lookup_prefetch_chains_beneficial())
             __lookup(info, pkts_mask, lookup_hit_mask);
         else
@@ -480,10 +477,8 @@ public:
     }
 
 private:
-    /** Extra pipelined prefetch when many overflow buckets sit in hash chains. */
     bool __lookup_prefetch_chains_beneficial() const {
-        if (__n_buckets_ext == 0)
-            return false;
+        if (__n_buckets_ext == 0) return false;
         const uint32_t overflow_in_use = __n_buckets_ext - __bkt_stack_pos;
         const uint32_t shifted         = __n_buckets_ext >> 6;
         const uint32_t thresh          = (256u > shifted) ? 256u : shifted;
@@ -497,7 +492,7 @@ private:
             uint32_t idx = __builtin_ctzll(pkts_mask);
             pkts_mask &= ~(1ULL << idx);
 
-            uint32_t     hash       = info[idx].lookup_hash();
+            uint32_t     hash = info[idx].lookup_hash();
             const key_t *key;
             info[idx].get_key(key);
 
@@ -522,7 +517,7 @@ private:
             uint32_t idx = __builtin_ctzll(pkts_mask);
             pkts_mask &= ~(1ULL << idx);
 
-            uint32_t     hash       = info[idx].lookup_hash();
+            uint32_t     hash = info[idx].lookup_hash();
             const key_t *key;
             info[idx].get_key(key);
 
@@ -606,7 +601,7 @@ private:
         for (uint32_t j = 0; j < count; j++) {
             uint32_t idx = indices[j];
 
-            uint32_t     hash       = info[idx].lookup_hash();
+            uint32_t     hash = info[idx].lookup_hash();
             const key_t *key;
             info[idx].get_key(key);
 
@@ -632,24 +627,15 @@ private:
 
     void __lookup(auto *info, uint64_t pkts_mask, uint64_t *lookup_hit_mask) {
         uint64_t hits = 0;
-        uint32_t pkt_indices[PKT_LIMIT];
-        uint32_t pkt_hashes[PKT_LIMIT];
-        const key_t *pkt_keys[PKT_LIMIT];
-        uint32_t pkt_count = 0;
 
         uint64_t mask = pkts_mask;
         while (mask) {
             uint32_t idx = __builtin_ctzll(mask);
             mask &= ~(1ULL << idx);
-            pkt_indices[pkt_count] = idx;
 
-            uint32_t     hash       = info[idx].lookup_hash();
+            uint32_t     hash = info[idx].lookup_hash();
             const key_t *key;
             info[idx].get_key(key);
-
-            pkt_hashes[pkt_count] = hash;
-            pkt_keys[pkt_count]   = key;
-            pkt_count++;
 
             rte_prefetch0(key);
 
@@ -665,17 +651,22 @@ private:
             }
         }
 
-        for (uint32_t j = 0; j < pkt_count; j++) {
-            uint32_t       idx  = pkt_indices[j];
-            const uint32_t hash = pkt_hashes[j];
-            const key_t   *key  = pkt_keys[j];
+        mask = pkts_mask;
+        while (mask) {
+            uint32_t idx = __builtin_ctzll(mask);
+            mask &= ~(1ULL << idx);
+
+            const uint32_t hash = info[idx].lookup_hash();
+            const key_t   *key;
+            info[idx].get_key(key);
 
             uint32_t sig        = (hash >> 16) | 1;
             uint32_t bucket_idx = hash & (__n_buckets - 1);
 
-            for (bucket_t *bkt = &__buckets[bucket_idx]; bkt; bkt = __bucket_next(bkt)) {
+            for (bucket_t *bkt = &__buckets[bucket_idx]; bkt;) {
+                bucket_t *nxt = __bucket_next(bkt);
                 rte_prefetch0(bkt);
-                if (__bucket_next(bkt)) rte_prefetch0(__bucket_next(bkt));
+                if (nxt) rte_prefetch0(nxt);
 
                 if (likely(bkt->__sig[0] == sig)) {
                     uint32_t key_idx = bkt->__key_pos[0];
@@ -712,6 +703,8 @@ private:
                         goto __next__;
                     }
                 }
+
+                bkt = nxt;
             }
         __next__:;
         }
